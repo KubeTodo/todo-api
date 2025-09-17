@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -43,4 +44,50 @@ func TestGetTodos(t *testing.T) {
 	assert.Equal(t, 2, len(response))
 	assert.Equal(t, "Learn Go", response[0].Title)
 	assert.Equal(t, "Set up CI/CD", response[1].Title)
+}
+
+func TestPostTodo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.Default()
+	r.POST("/todos", func(c *gin.Context) {
+		var newTodo Todo
+		if err := c.ShouldBindJSON(&newTodo); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		newTodo.ID = len(todos) + 1
+		todos = append(todos, newTodo)
+		c.JSON(http.StatusCreated, newTodo)
+	})
+
+	// Create a JSON payload for the new todo
+	payload := `{"title": "Test Todo", "done": false}`
+
+	// Create a request with the payload
+	req, err := http.NewRequest("POST", "/todos", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("Could not create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Create a response recorder
+	w := httptest.NewRecorder()
+
+	// Serve the request
+	r.ServeHTTP(w, req)
+
+	// Check the status code
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	// Decode the response
+	var response Todo
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatalf("Could not decode response: %v", err)
+	}
+
+	// Assert the response
+	assert.Equal(t, "Test Todo", response.Title)
+	assert.Equal(t, false, response.Done)
+	assert.Equal(t, 3, response.ID)
 }
