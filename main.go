@@ -66,6 +66,23 @@ func main() {
 		}
 	})
 
+	// DELETE remove a todo
+	r.DELETE("/todos/:id", func(c *gin.Context) {
+		id := c.Param("id")
+
+		// Find the index of the todo by ID
+		for i, todo := range todos {
+			if todo.ID == toInt(id) {
+				// Remove the todo from the slice
+				todos = append(todos[:i], todos[i+1:]...)
+				c.JSON(http.StatusOK, gin.H{"message": "Todo deleted"})
+				return
+			}
+		}
+
+		c.JSON(http.StatusNotFound, gin.H{"error": "Todo not found"})
+	})
+
 	r.Run(":8080")
 }
 
