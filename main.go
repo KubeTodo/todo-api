@@ -97,7 +97,17 @@ func (db *Database) CreateTodo(todo *Todo) error {
 
 // UpdateTodo updates an existing todo
 func (db *Database) UpdateTodo(id int, updatedTodo Todo) (*Todo, error) {
-	_, err := db.conn.Exec("UPDATE todos SET title = ?, done = ? WHERE id = ?", updatedTodo.Title, updatedTodo.Done, id)
+	// First check if the todo exists
+	existing, err := db.GetTodoByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, nil // Return nil for not found (no error)
+	}
+
+	_, err = db.conn.Exec("UPDATE todos SET title = ?, done = ? WHERE id = ?",
+		updatedTodo.Title, updatedTodo.Done, id)
 	if err != nil {
 		return nil, err
 	}
@@ -168,23 +178,17 @@ func SetupRouter(db DatabaseInterface) *gin.Engine {
 			return
 		}
 
-		existingTodo, err := db.GetTodoByID(id)
+		result, err := db.UpdateTodo(id, updatedTodo)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		if existingTodo == nil {
+		if result == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Todo not found"})
 			return
 		}
 
-		updatedTodo.ID = id
-		if _, err := db.UpdateTodo(id, updatedTodo); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, updatedTodo)
+		c.JSON(http.StatusOK, result)
 	})
 
 	r.DELETE("/todos/:id", func(c *gin.Context) {
