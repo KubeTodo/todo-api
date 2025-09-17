@@ -17,7 +17,17 @@ type Todo struct {
 	Done  bool   `json:"done"`
 }
 
-// Database wraps the SQLite connection
+// DatabaseInterface defines the interface for database operations
+type DatabaseInterface interface {
+	GetTodos() ([]Todo, error)
+	CreateTodo(*Todo) error
+	UpdateTodo(int, Todo) (*Todo, error)
+	DeleteTodo(int) error
+	GetTodoByID(int) (*Todo, error)
+	Close() error
+}
+
+// Database wraps the SQLite connection and implements DatabaseInterface
 type Database struct {
 	conn *sql.DB
 }
@@ -92,6 +102,8 @@ func (db *Database) UpdateTodo(id int, updatedTodo Todo) (*Todo, error) {
 		return nil, err
 	}
 
+	// Return the updated todo with the correct ID
+	updatedTodo.ID = id
 	return &updatedTodo, nil
 }
 
@@ -115,14 +127,12 @@ func (db *Database) GetTodoByID(id int) (*Todo, error) {
 	return &todo, nil
 }
 
-var db *Database
-
 // SetupRouter initializes and returns the Gin router with all routes
-func SetupRouter(database *Database) *gin.Engine {
+func SetupRouter(db DatabaseInterface) *gin.Engine {
 	r := gin.Default()
 
 	r.GET("/todos", func(c *gin.Context) {
-		todos, err := database.GetTodos()
+		todos, err := db.GetTodos()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -137,7 +147,7 @@ func SetupRouter(database *Database) *gin.Engine {
 			return
 		}
 
-		if err := database.CreateTodo(&newTodo); err != nil {
+		if err := db.CreateTodo(&newTodo); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -158,7 +168,7 @@ func SetupRouter(database *Database) *gin.Engine {
 			return
 		}
 
-		existingTodo, err := database.GetTodoByID(id)
+		existingTodo, err := db.GetTodoByID(id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -169,7 +179,7 @@ func SetupRouter(database *Database) *gin.Engine {
 		}
 
 		updatedTodo.ID = id
-		if _, err := database.UpdateTodo(id, updatedTodo); err != nil {
+		if _, err := db.UpdateTodo(id, updatedTodo); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -184,7 +194,7 @@ func SetupRouter(database *Database) *gin.Engine {
 			return
 		}
 
-		existingTodo, err := database.GetTodoByID(id)
+		existingTodo, err := db.GetTodoByID(id)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -194,7 +204,7 @@ func SetupRouter(database *Database) *gin.Engine {
 			return
 		}
 
-		if err := database.DeleteTodo(id); err != nil {
+		if err := db.DeleteTodo(id); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -206,8 +216,7 @@ func SetupRouter(database *Database) *gin.Engine {
 }
 
 func main() {
-	var err error
-	db, err = NewDatabase()
+	db, err := NewDatabase()
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
