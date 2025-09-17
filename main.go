@@ -1,17 +1,29 @@
 package main
 
 import (
-	"github.com/gin-gonic/gin"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
+
+type Todo struct {
+	ID    int    `json:"id"`
+	Title string `json:"title"`
+	Done  bool   `json:"done"`
+}
+
+// In memory initialized todo for now.
+var todos = []Todo{
+	{ID: 1, Title: "Learn Go", Done: false},
+	{ID: 2, Title: "Set up CI/CD", Done: false},
+}
 
 func main() {
 	r := gin.Default()
 
-	r.GET("/", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Welcome to DevOps Todo Lab!",
-		})
+	// GET all todos
+	r.GET("/todos", func(c *gin.Context) {
+		c.JSON(http.StatusOK, todos)
 	})
 
 	r.Run(":8080")
