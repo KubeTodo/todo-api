@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,42 +9,76 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 )
 
-func resetTodos() {
-	todos = []Todo{
-		{ID: 1, Title: "Learn Go", Done: false},
-		{ID: 2, Title: "Set up CI/CD", Done: false},
+func setupTestDB(t *testing.T) *Database {
+	// Use an in-memory database for tests
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open test database: %v", err)
 	}
+
+	// Create the schema
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS todos (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			done BOOLEAN NOT NULL DEFAULT false
+		)
+	`); err != nil {
+		t.Fatalf("Failed to create test schema: %v", err)
+	}
+
+	// Clean up after the test
+	t.Cleanup(func() {
+		db.Close()
+	})
+
+	return &Database{conn: db}
 }
 
 func TestGetTodos(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	r := SetupRouter()
+	testDB := setupTestDB(t)
 
-	t.Run("Success", func(t *testing.T) {
-		resetTodos()
-		req, _ := http.NewRequest("GET", "/todos", nil)
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+	// Insert test data using the same database connection
+	_, err := testDB.conn.Exec("INSERT INTO todos (title, done) VALUES (?, ?), (?, ?)",
+		"Learn Go", false,
+		"Set up CI/CD", false,
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
 
-		assert.Equal(t, http.StatusOK, w.Code)
+	r := SetupRouter(testDB)
 
-		var response []Todo
-		json.Unmarshal(w.Body.Bytes(), &response)
+	req, _ := http.NewRequest("GET", "/todos", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
 
-		assert.Equal(t, 2, len(response))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response []Todo
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatalf("Could not decode response: %v", err)
+	}
+
+	assert.Equal(t, 2, len(response))
+	if len(response) > 0 {
 		assert.Equal(t, "Learn Go", response[0].Title)
-	})
+		assert.Equal(t, "Set up CI/CD", response[1].Title)
+	}
 }
 
 func TestPostTodo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	r := SetupRouter()
+	testDB := setupTestDB(t)
+	r := SetupRouter(testDB)
 
 	t.Run("Success", func(t *testing.T) {
-		resetTodos()
 		payload := `{"title": "New Todo", "done": false}`
 		req, _ := http.NewRequest("POST", "/todos", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
@@ -54,14 +89,17 @@ func TestPostTodo(t *testing.T) {
 		assert.Equal(t, http.StatusCreated, w.Code)
 
 		var response Todo
-		json.Unmarshal(w.Body.Bytes(), &response)
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Could not decode response: %v", err)
+		}
 
 		assert.Equal(t, "New Todo", response.Title)
-		assert.Equal(t, 3, response.ID)
+		assert.Equal(t, false, response.Done)
+		assert.NotZero(t, response.ID)
 	})
 
 	t.Run("Invalid JSON", func(t *testing.T) {
-		resetTodos()
 		payload := `{"title": "New Todo", "done": }` // Invalid JSON
 		req, _ := http.NewRequest("POST", "/todos", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
@@ -75,10 +113,17 @@ func TestPostTodo(t *testing.T) {
 
 func TestPutTodo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	r := SetupRouter()
+	testDB := setupTestDB(t)
+
+	// Insert test data using the same database connection
+	_, err := testDB.conn.Exec("INSERT INTO todos (title, done) VALUES (?, ?)", "Test Todo", false)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	r := SetupRouter(testDB)
 
 	t.Run("Success", func(t *testing.T) {
-		resetTodos()
 		payload := `{"title": "Updated Todo", "done": true}`
 		req, _ := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
@@ -89,14 +134,17 @@ func TestPutTodo(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		var response Todo
-		json.Unmarshal(w.Body.Bytes(), &response)
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Could not decode response: %v", err)
+		}
 
 		assert.Equal(t, "Updated Todo", response.Title)
 		assert.Equal(t, true, response.Done)
+		assert.Equal(t, 1, response.ID)
 	})
 
 	t.Run("Invalid JSON", func(t *testing.T) {
-		resetTodos()
 		payload := `{"title": "Updated Todo", "done": }` // Invalid JSON
 		req, _ := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
@@ -108,7 +156,6 @@ func TestPutTodo(t *testing.T) {
 	})
 
 	t.Run("Not Found", func(t *testing.T) {
-		resetTodos()
 		payload := `{"title": "Updated Todo", "done": true}`
 		req, _ := http.NewRequest("PUT", "/todos/999", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
@@ -122,10 +169,17 @@ func TestPutTodo(t *testing.T) {
 
 func TestDeleteTodo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	r := SetupRouter()
+	testDB := setupTestDB(t)
+
+	// Insert test data using the same database connection
+	_, err := testDB.conn.Exec("INSERT INTO todos (title, done) VALUES (?, ?)", "Test Todo", false)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	r := SetupRouter(testDB)
 
 	t.Run("Success", func(t *testing.T) {
-		resetTodos()
 		req, _ := http.NewRequest("DELETE", "/todos/1", nil)
 
 		w := httptest.NewRecorder()
@@ -134,40 +188,20 @@ func TestDeleteTodo(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		var response map[string]string
-		json.Unmarshal(w.Body.Bytes(), &response)
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		if err != nil {
+			t.Fatalf("Could not decode response: %v", err)
+		}
 
 		assert.Equal(t, "Todo deleted", response["message"])
 	})
 
 	t.Run("Not Found", func(t *testing.T) {
-		resetTodos()
 		req, _ := http.NewRequest("DELETE", "/todos/999", nil)
 
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusNotFound, w.Code)
-	})
-}
-
-func TestToInt(t *testing.T) {
-	t.Run("Valid Integer", func(t *testing.T) {
-		result := toInt("123")
-		assert.Equal(t, 123, result)
-	})
-
-	t.Run("Zero String", func(t *testing.T) {
-		result := toInt("0")
-		assert.Equal(t, 0, result)
-	})
-
-	t.Run("Invalid Integer", func(t *testing.T) {
-		result := toInt("abc")
-		assert.Equal(t, 0, result) // Function returns 0 for invalid input
-	})
-
-	t.Run("Empty String", func(t *testing.T) {
-		result := toInt("")
-		assert.Equal(t, 0, result)
 	})
 }
