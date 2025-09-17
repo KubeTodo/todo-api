@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -38,6 +39,41 @@ func main() {
 		todos = append(todos, newTodo)
 		c.JSON(http.StatusCreated, newTodo)
 	})
+
+	// PUT update a todo
+	r.PUT("/todos/:id", func(c *gin.Context) {
+	    id := c.Param("id")
+	    var updatedTodo Todo
+	    if err := c.ShouldBindJSON(&updatedTodo); err != nil {
+	        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	        return
+	    }
+
+	    // Find the todo by ID
+	    var found bool
+	    for i, todo := range todos {
+	        if todo.ID == toInt(id) {
+	            todos[i].Title = updatedTodo.Title
+	            todos[i].Done = updatedTodo.Done
+	            found = true
+	            c.JSON(http.StatusOK, todos[i])
+	            return
+	        }
+	    }
+
+	    if !found {
+	        c.JSON(http.StatusNotFound, gin.H{"error": "Todo not found"})
+	    }
+	})
+
+// Helper function to convert ID string to int
+func toInt(s string) int {
+    id, err := strconv.Atoi(s)
+    if err != nil {
+        return 0
+    }
+    return id
+}
 
 	r.Run(":8080")
 }
