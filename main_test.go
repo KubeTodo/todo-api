@@ -11,104 +11,141 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func resetTodos() {
+	todos = []Todo{
+		{ID: 1, Title: "Learn Go", Done: false},
+		{ID: 2, Title: "Set up CI/CD", Done: false},
+	}
+}
+
 func TestGetTodos(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := SetupRouter()
 
-	req, err := http.NewRequest("GET", "/todos", nil)
-	if err != nil {
-		t.Fatalf("Could not create request: %v", err)
-	}
+	t.Run("Success", func(t *testing.T) {
+		resetTodos()
+		req, _ := http.NewRequest("GET", "/todos", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
 
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+		var response []Todo
+		json.Unmarshal(w.Body.Bytes(), &response)
 
-	var response []Todo
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	if err != nil {
-		t.Fatalf("Could not decode response: %v", err)
-	}
-
-	assert.Equal(t, 2, len(response))
-	assert.Equal(t, "Learn Go", response[0].Title)
-	assert.Equal(t, "Set up CI/CD", response[1].Title)
+		assert.Equal(t, 2, len(response))
+		assert.Equal(t, "Learn Go", response[0].Title)
+	})
 }
 
 func TestPostTodo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := SetupRouter()
 
-	payload := `{"title": "Test Todo", "done": false}`
-	req, err := http.NewRequest("POST", "/todos", strings.NewReader(payload))
-	if err != nil {
-		t.Fatalf("Could not create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	t.Run("Success", func(t *testing.T) {
+		resetTodos()
+		payload := `{"title": "New Todo", "done": false}`
+		req, _ := http.NewRequest("POST", "/todos", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
 
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusCreated, w.Code)
+		assert.Equal(t, http.StatusCreated, w.Code)
 
-	var response Todo
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	if err != nil {
-		t.Fatalf("Could not decode response: %v", err)
-	}
+		var response Todo
+		json.Unmarshal(w.Body.Bytes(), &response)
 
-	assert.Equal(t, "Test Todo", response.Title)
-	assert.Equal(t, false, response.Done)
-	assert.Equal(t, 3, response.ID)
+		assert.Equal(t, "New Todo", response.Title)
+		assert.Equal(t, 3, response.ID)
+	})
+
+	t.Run("Invalid JSON", func(t *testing.T) {
+		resetTodos()
+		payload := `{"title": "New Todo", "done": }` // Invalid JSON
+		req, _ := http.NewRequest("POST", "/todos", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
 }
 
 func TestPutTodo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := SetupRouter()
 
-	payload := `{"title": "Updated Todo", "done": true}`
-	req, err := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
-	if err != nil {
-		t.Fatalf("Could not create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	t.Run("Success", func(t *testing.T) {
+		resetTodos()
+		payload := `{"title": "Updated Todo", "done": true}`
+		req, _ := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
 
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, http.StatusOK, w.Code)
 
-	var response Todo
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	if err != nil {
-		t.Fatalf("Could not decode response: %v", err)
-	}
+		var response Todo
+		json.Unmarshal(w.Body.Bytes(), &response)
 
-	assert.Equal(t, "Updated Todo", response.Title)
-	assert.Equal(t, true, response.Done)
-	assert.Equal(t, 1, response.ID)
+		assert.Equal(t, "Updated Todo", response.Title)
+		assert.Equal(t, true, response.Done)
+	})
+
+	t.Run("Invalid JSON", func(t *testing.T) {
+		resetTodos()
+		payload := `{"title": "Updated Todo", "done": }` // Invalid JSON
+		req, _ := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("Not Found", func(t *testing.T) {
+		resetTodos()
+		payload := `{"title": "Updated Todo", "done": true}`
+		req, _ := http.NewRequest("PUT", "/todos/999", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
 }
 
 func TestDeleteTodo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := SetupRouter()
 
-	req, err := http.NewRequest("DELETE", "/todos/1", nil)
-	if err != nil {
-		t.Fatalf("Could not create request: %v", err)
-	}
+	t.Run("Success", func(t *testing.T) {
+		resetTodos()
+		req, _ := http.NewRequest("DELETE", "/todos/1", nil)
 
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, http.StatusOK, w.Code)
 
-	var response map[string]string
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	if err != nil {
-		t.Fatalf("Could not decode response: %v", err)
-	}
+		var response map[string]string
+		json.Unmarshal(w.Body.Bytes(), &response)
 
-	assert.Equal(t, "Todo deleted", response["message"])
+		assert.Equal(t, "Todo deleted", response["message"])
+	})
+
+	t.Run("Not Found", func(t *testing.T) {
+		resetTodos()
+		req, _ := http.NewRequest("DELETE", "/todos/999", nil)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
 }
