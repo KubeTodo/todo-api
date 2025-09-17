@@ -1,173 +1,318 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 )
 
-func resetTodos() {
-	todos = []Todo{
-		{ID: 1, Title: "Learn Go", Done: false},
-		{ID: 2, Title: "Set up CI/CD", Done: false},
+// MockDatabase implements DatabaseInterface for testing
+type MockDatabase struct {
+	GetTodosFunc    func() ([]Todo, error)
+	CreateTodoFunc  func(*Todo) error
+	UpdateTodoFunc  func(int, Todo) (*Todo, error)
+	DeleteTodoFunc  func(int) error
+	GetTodoByIDFunc func(int) (*Todo, error)
+	CloseFunc       func() error
+}
+
+func (m *MockDatabase) GetTodos() ([]Todo, error) {
+	if m.GetTodosFunc != nil {
+		return m.GetTodosFunc()
 	}
+	return nil, errors.New("GetTodosFunc not implemented")
+}
+func (m *MockDatabase) CreateTodo(todo *Todo) error {
+	if m.CreateTodoFunc != nil {
+		return m.CreateTodoFunc(todo)
+	}
+	return errors.New("CreateTodoFunc not implemented")
+}
+func (m *MockDatabase) UpdateTodo(id int, todo Todo) (*Todo, error) {
+	if m.UpdateTodoFunc != nil {
+		return m.UpdateTodoFunc(id, todo)
+	}
+	return nil, errors.New("UpdateTodoFunc not implemented")
+}
+func (m *MockDatabase) DeleteTodo(id int) error {
+	if m.DeleteTodoFunc != nil {
+		return m.DeleteTodoFunc(id)
+	}
+	return errors.New("DeleteTodoFunc not implemented")
+}
+func (m *MockDatabase) GetTodoByID(id int) (*Todo, error) {
+	if m.GetTodoByIDFunc != nil {
+		return m.GetTodoByIDFunc(id)
+	}
+	return nil, errors.New("GetTodoByIDFunc not implemented")
+}
+func (m *MockDatabase) Close() error {
+	if m.CloseFunc != nil {
+		return m.CloseFunc()
+	}
+	return errors.New("CloseFunc not implemented")
+}
+
+func setupTestDB(t *testing.T) *Database {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open test database: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS todos (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			done BOOLEAN NOT NULL DEFAULT false
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test schema: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Close()
+	})
+	return &Database{conn: db}
 }
 
 func TestGetTodos(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := SetupRouter()
-
 	t.Run("Success", func(t *testing.T) {
-		resetTodos()
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		_, err := testDB.conn.Exec("INSERT INTO todos (title, done) VALUES (?, ?), (?, ?)", "Learn Go", false, "Set up CI/CD", false)
+		assert.NoError(t, err)
+		r := SetupRouter(testDB)
 		req, _ := http.NewRequest("GET", "/todos", nil)
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-
 		assert.Equal(t, http.StatusOK, w.Code)
-
 		var response []Todo
-		json.Unmarshal(w.Body.Bytes(), &response)
-
-		assert.Equal(t, 2, len(response))
-		assert.Equal(t, "Learn Go", response[0].Title)
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Len(t, response, 2)
+	})
+	t.Run("Database Error", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		mockDB := &MockDatabase{
+			GetTodosFunc: func() ([]Todo, error) {
+				return nil, errors.New("database error")
+			},
+		}
+		r := SetupRouter(mockDB)
+		req, _ := http.NewRequest("GET", "/todos", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 }
 
 func TestPostTodo(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := SetupRouter()
-
 	t.Run("Success", func(t *testing.T) {
-		resetTodos()
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		r := SetupRouter(testDB)
 		payload := `{"title": "New Todo", "done": false}`
 		req, _ := http.NewRequest("POST", "/todos", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
-
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-
 		assert.Equal(t, http.StatusCreated, w.Code)
-
 		var response Todo
-		json.Unmarshal(w.Body.Bytes(), &response)
-
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Equal(t, "New Todo", response.Title)
-		assert.Equal(t, 3, response.ID)
+		assert.Equal(t, false, response.Done)
+		assert.NotZero(t, response.ID)
 	})
-
 	t.Run("Invalid JSON", func(t *testing.T) {
-		resetTodos()
-		payload := `{"title": "New Todo", "done": }` // Invalid JSON
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		r := SetupRouter(testDB)
+		payload := `{"title": "New Todo", "done": }`
 		req, _ := http.NewRequest("POST", "/todos", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
-
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-
 		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+	t.Run("Database Error", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		mockDB := &MockDatabase{
+			CreateTodoFunc: func(*Todo) error {
+				return errors.New("database error")
+			},
+		}
+		r := SetupRouter(mockDB)
+		payload := `{"title": "New Todo", "done": false}`
+		req, _ := http.NewRequest("POST", "/todos", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 }
 
 func TestPutTodo(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := SetupRouter()
-
 	t.Run("Success", func(t *testing.T) {
-		resetTodos()
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		_, err := testDB.conn.Exec("INSERT INTO todos (title, done) VALUES (?, ?)", "Test Todo", false)
+		assert.NoError(t, err)
+		r := SetupRouter(testDB)
 		payload := `{"title": "Updated Todo", "done": true}`
 		req, _ := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
-
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-
 		assert.Equal(t, http.StatusOK, w.Code)
-
 		var response Todo
-		json.Unmarshal(w.Body.Bytes(), &response)
-
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Equal(t, "Updated Todo", response.Title)
 		assert.Equal(t, true, response.Done)
 	})
-
-	t.Run("Invalid JSON", func(t *testing.T) {
-		resetTodos()
-		payload := `{"title": "Updated Todo", "done": }` // Invalid JSON
-		req, _ := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
+	t.Run("Invalid ID", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		r := SetupRouter(testDB)
+		payload := `{"title": "Updated Todo", "done": true}`
+		req, _ := http.NewRequest("PUT", "/todos/abc", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
-
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
-
+	t.Run("Invalid JSON", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		r := SetupRouter(testDB)
+		payload := `{"title": "Updated Todo", "done": }`
+		req, _ := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
 	t.Run("Not Found", func(t *testing.T) {
-		resetTodos()
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		r := SetupRouter(testDB)
 		payload := `{"title": "Updated Todo", "done": true}`
 		req, _ := http.NewRequest("PUT", "/todos/999", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
-
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-
 		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+	t.Run("Database Error on Get", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		mockDB := &MockDatabase{
+			GetTodoByIDFunc: func(int) (*Todo, error) {
+				return nil, errors.New("database error")
+			},
+			UpdateTodoFunc: func(int, Todo) (*Todo, error) {
+				return nil, errors.New("should not be called")
+			},
+		}
+		r := SetupRouter(mockDB)
+		payload := `{"title": "Updated Todo", "done": true}`
+		req, _ := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+	t.Run("Database Error on Update", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		mockDB := &MockDatabase{
+			GetTodoByIDFunc: func(int) (*Todo, error) {
+				return &Todo{ID: 1, Title: "Old", Done: false}, nil
+			},
+			UpdateTodoFunc: func(int, Todo) (*Todo, error) {
+				return nil, errors.New("database error")
+			},
+		}
+		r := SetupRouter(mockDB)
+		payload := `{"title": "Updated Todo", "done": true}`
+		req, _ := http.NewRequest("PUT", "/todos/1", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 }
 
 func TestDeleteTodo(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := SetupRouter()
-
 	t.Run("Success", func(t *testing.T) {
-		resetTodos()
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		_, err := testDB.conn.Exec("INSERT INTO todos (title, done) VALUES (?, ?)", "Test Todo", false)
+		assert.NoError(t, err)
+		r := SetupRouter(testDB)
 		req, _ := http.NewRequest("DELETE", "/todos/1", nil)
-
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-
 		assert.Equal(t, http.StatusOK, w.Code)
-
 		var response map[string]string
-		json.Unmarshal(w.Body.Bytes(), &response)
-
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
 		assert.Equal(t, "Todo deleted", response["message"])
 	})
-
-	t.Run("Not Found", func(t *testing.T) {
-		resetTodos()
-		req, _ := http.NewRequest("DELETE", "/todos/999", nil)
-
+	t.Run("Invalid ID", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		r := SetupRouter(testDB)
+		req, _ := http.NewRequest("DELETE", "/todos/abc", nil)
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+	t.Run("Not Found", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		testDB := setupTestDB(t)
+		r := SetupRouter(testDB)
+		req, _ := http.NewRequest("DELETE", "/todos/999", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
-}
-
-func TestToInt(t *testing.T) {
-	t.Run("Valid Integer", func(t *testing.T) {
-		result := toInt("123")
-		assert.Equal(t, 123, result)
+	t.Run("Database Error on Get", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		mockDB := &MockDatabase{
+			GetTodoByIDFunc: func(int) (*Todo, error) {
+				return nil, errors.New("database error")
+			},
+			DeleteTodoFunc: func(int) error {
+				return errors.New("should not be called")
+			},
+		}
+		r := SetupRouter(mockDB)
+		req, _ := http.NewRequest("DELETE", "/todos/1", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
-
-	t.Run("Zero String", func(t *testing.T) {
-		result := toInt("0")
-		assert.Equal(t, 0, result)
-	})
-
-	t.Run("Invalid Integer", func(t *testing.T) {
-		result := toInt("abc")
-		assert.Equal(t, 0, result) // Function returns 0 for invalid input
-	})
-
-	t.Run("Empty String", func(t *testing.T) {
-		result := toInt("")
-		assert.Equal(t, 0, result)
+	t.Run("Database Error on Delete", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		mockDB := &MockDatabase{
+			GetTodoByIDFunc: func(int) (*Todo, error) {
+				return &Todo{ID: 1, Title: "Test", Done: false}, nil
+			},
+			DeleteTodoFunc: func(int) error {
+				return errors.New("database error")
+			},
+		}
+		r := SetupRouter(mockDB)
+		req, _ := http.NewRequest("DELETE", "/todos/1", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 }
