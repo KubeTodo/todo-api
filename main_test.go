@@ -149,3 +149,25 @@ func TestDeleteTodo(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
 }
+
+func TestToInt(t *testing.T) {
+	t.Run("Valid Integer", func(t *testing.T) {
+		result := toInt("123")
+		assert.Equal(t, 123, result)
+	})
+
+	t.Run("Zero String", func(t *testing.T) {
+		result := toInt("0")
+		assert.Equal(t, 0, result)
+	})
+
+	t.Run("Invalid Integer", func(t *testing.T) {
+		result := toInt("abc")
+		assert.Equal(t, 0, result) // Function returns 0 for invalid input
+	})
+
+	t.Run("Empty String", func(t *testing.T) {
+		result := toInt("")
+		assert.Equal(t, 0, result)
+	})
+}
